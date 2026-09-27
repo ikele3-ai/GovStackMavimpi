@@ -1,4 +1,4 @@
-# GovStuckMavimpi – Dossier Patient Hospitalier (GovStack Santé RDC)
+# GovStackMavimpi – Dossier Patient Hospitalier (GovStack Santé RDC)
 
 Première solution **GovStack** pour le secteur de la santé en République Démocratique du Congo :
 une application web de **gestion des malades** pour les hôpitaux, hébergée sur un VPS.
