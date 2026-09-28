@@ -1,0 +1,15 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:3000
+	header {
+		-Server
+	}
+	log {
+		output stdout
+		format console
+	}
+}

@@ -1,0 +1,38 @@
+# Déploiement sur VPS : application + reverse proxy Caddy (HTTPS automatique Let's Encrypt)
+services:
+  app:
+    build: .
+    image: govstack-sante-rdc:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      TRUST_PROXY: "1"
+      COOKIE_SECURE: "true"
+    volumes:
+      - sante-data:/data
+    expose:
+      - "3000"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Définissez DOMAIN dans .env}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  sante-data:
+  caddy-data:
+  caddy-config:

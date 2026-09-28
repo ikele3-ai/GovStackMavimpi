@@ -1,0 +1,28 @@
+# Alternative sans Docker : service systemd (Node.js >= 22.13 installé sur le VPS).
+# Installation : voir docs/DEPLOIEMENT.md
+[Unit]
+Description=GovStack Santé RDC - Dossier Patient
+After=network.target
+
+[Service]
+Type=simple
+User=sante
+WorkingDirectory=/opt/govstack-sante
+EnvironmentFile=/opt/govstack-sante/.env
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+Environment=TRUST_PROXY=1
+Environment=DATABASE_PATH=/var/lib/govstack-sante/sante.db
+Environment=BACKUP_DIR=/var/lib/govstack-sante/backups
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning src/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/govstack-sante
+
+[Install]
+WantedBy=multi-user.target
