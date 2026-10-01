@@ -39,9 +39,10 @@ passage à PostgreSQL est prévu dans la feuille de route si la charge l'exige.
 ## Modèle de données
 
 - `etablissements` – hôpitaux et centres de santé
-- `users` – comptes (`admin`, `medecin`, `patient` lié à une fiche)
+- `users` – comptes (`admin`, `medecin`, `infirmier`, `patient` lié à une fiche)
 - `patients` – fiche : identité (nom, postnom, prénom), coordonnées, groupe sanguin, allergies, antécédents, contact d'urgence
 - `consultations` (+ `prescriptions`) – signes vitaux, diagnostic, code CIM‑10, traitement
+- `soins` – soins infirmiers : signes vitaux, glycémie, note de soins (rattachés à l'hospitalisation en cours)
 - `examens` – demande puis résultat
 - `hospitalisations` – admission, service/chambre/lit, sortie
 - `rendez_vous`
@@ -53,13 +54,18 @@ d'usage pour un dossier médical ; les corrections se font par une nouvelle cons
 
 ## Règles d'accès
 
-| Donnée | Admin | Médecin | Patient |
-|---|---|---|---|
-| Établissements, comptes, audit global | ✔ | lecture établissements | lecture établissements |
-| Fiches patients (lecture) | ✘ | ✔ toutes (tracé) | ✔ la sienne uniquement |
-| Fiches patients (écriture) | ✘ | ✔ | ✘ |
-| Journal des accès d'un dossier | ✔ (global) | ✔ | ✔ le sien |
-| Rendez‑vous | ✘ | créer, confirmer, terminer, annuler | demander, annuler les siens |
+| Donnée | Admin | Médecin | Infirmier | Patient |
+|---|---|---|---|---|
+| Établissements, comptes, audit global | ✔ | lecture établissements | lecture établissements | lecture établissements |
+| Fiches patients (lecture) | ✘ | ✔ toutes (tracé) | ✔ toutes (tracé) | ✔ la sienne uniquement |
+| Création / modification de l'identité | ✘ | ✔ | ✔ | ✘ |
+| Soins infirmiers, signes vitaux | ✘ | ✔ | ✔ | ✘ |
+| Résultats d'examens | ✘ | ✔ | ✔ | ✘ |
+| Diagnostic, prescription, demande d'examen | ✘ | ✔ | ✘ | ✘ |
+| Admission / sortie d'hospitalisation | ✘ | ✔ | ✘ | ✘ |
+| Accès en ligne du patient | ✘ | ✔ | ✘ | ✘ |
+| Journal des accès d'un dossier | ✔ (global) | ✔ | ✔ | ✔ le sien |
+| Rendez‑vous | ✘ | créer, confirmer, terminer, annuler | idem, pour tout son établissement | demander, annuler les siens |
 
 ## Feuille de route
 
@@ -68,4 +74,4 @@ d'usage pour un dossier médical ; les corrections se font par une nouvelle cons
 3. Rattachement à l'identité nationale et authentification unique (OIDC).
 4. Mode hors‑ligne pour les centres de santé à connectivité intermittente.
 5. Tableaux de bord épidémiologiques et export vers DHIS2.
-6. Rôles supplémentaires : infirmier, laborantin, réceptionniste.
+6. Rôles supplémentaires : laborantin, réceptionniste ; prescription infirmière dans les centres de santé (paramétrable par établissement).

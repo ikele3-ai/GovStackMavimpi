@@ -183,6 +183,53 @@ const MIGRATIONS = [
   CREATE INDEX idx_audit_patient ON audit_log(patient_id, ts);
   CREATE INDEX idx_audit_ts ON audit_log(ts);
   `,
+  // v2 : rôle « infirmier » et notes de soins infirmiers.
+  // SQLite ne permet pas de modifier une contrainte CHECK : la table users est reconstruite.
+  `
+  CREATE TABLE users_v2 (
+    id                    INTEGER PRIMARY KEY,
+    username              TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash         TEXT NOT NULL,
+    role                  TEXT NOT NULL CHECK (role IN ('admin','medecin','infirmier','patient')),
+    nom                   TEXT NOT NULL,
+    prenom                TEXT,
+    email                 TEXT,
+    telephone             TEXT,
+    specialite            TEXT,
+    numero_ordre          TEXT,
+    etablissement_id      INTEGER REFERENCES etablissements(id),
+    patient_id            INTEGER UNIQUE REFERENCES patients(id),
+    actif                 INTEGER NOT NULL DEFAULT 1,
+    must_change_password  INTEGER NOT NULL DEFAULT 1,
+    last_login_at         TEXT,
+    created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  INSERT INTO users_v2 SELECT * FROM users;
+  DROP TABLE users;
+  ALTER TABLE users_v2 RENAME TO users;
+
+  CREATE TABLE soins (
+    id                 INTEGER PRIMARY KEY,
+    patient_id         INTEGER NOT NULL REFERENCES patients(id),
+    auteur_id          INTEGER NOT NULL REFERENCES users(id),
+    etablissement_id   INTEGER REFERENCES etablissements(id),
+    hospitalisation_id INTEGER REFERENCES hospitalisations(id),
+    date               TEXT NOT NULL,
+    type               TEXT NOT NULL,
+    temperature        REAL,
+    tension_sys        INTEGER,
+    tension_dia        INTEGER,
+    pouls              INTEGER,
+    frequence_resp     INTEGER,
+    saturation         INTEGER,
+    poids              REAL,
+    taille             REAL,
+    glycemie           REAL,
+    note               TEXT,
+    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE INDEX idx_soins_patient ON soins(patient_id, date);
+  `,
 ];
 
 export function openDatabase(file) {
@@ -195,11 +242,21 @@ export function openDatabase(file) {
 
 function migrate(db) {
   const current = db.prepare('PRAGMA user_version').get().user_version;
-  for (let v = current; v < MIGRATIONS.length; v++) {
-    tx(db, () => {
-      db.exec(MIGRATIONS[v]);
-      db.exec(`PRAGMA user_version = ${v + 1}`);
-    });
+  if (current >= MIGRATIONS.length) return;
+  // Les clés étrangères sont suspendues pendant les migrations (reconstruction de tables),
+  // puis vérifiées avant validation de chaque migration.
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    for (let v = current; v < MIGRATIONS.length; v++) {
+      tx(db, () => {
+        db.exec(MIGRATIONS[v]);
+        const broken = db.prepare('PRAGMA foreign_key_check').all();
+        if (broken.length) throw new Error(`Migration ${v + 1} : ${broken.length} clé(s) étrangère(s) invalide(s)`);
+        db.exec(`PRAGMA user_version = ${v + 1}`);
+      });
+    }
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
   }
 }
 

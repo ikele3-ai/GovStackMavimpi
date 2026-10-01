@@ -9,8 +9,9 @@ Les **médecins** gèrent les dossiers ; chaque **malade** accède à **sa propr
 | Profil | Ce qu'il peut faire |
 |---|---|
 | **Médecin** | Rechercher / créer des fiches patients (avec **Numéro Unique Patient – NUP**), consultations (signes vitaux, diagnostic CIM‑10, ordonnance), demandes et résultats d'examens, hospitalisations (admission / sortie), rendez‑vous, création de l'accès en ligne du patient, export FHIR, impression de la fiche |
+| **Infirmier(ère)** | Accueil et création des fiches, lecture des dossiers (tracée), **soins infirmiers** (signes vitaux, glycémie, notes de soins, médicaments administrés), saisie des résultats d'examens, rendez‑vous de son établissement. **Ne pose pas de diagnostic, ne prescrit pas, ne demande pas d'examen, n'admet pas et ne fait pas sortir un patient.** |
 | **Patient** | Consulter **uniquement sa fiche** (identité, consultations, ordonnances, résultats, hospitalisations), demander / annuler un rendez‑vous, voir **qui a consulté son dossier**, télécharger son dossier (FHIR), changer son mot de passe |
-| **Administrateur** | Gérer les établissements (26 provinces), les comptes médecins, réinitialiser les mots de passe, consulter le journal d'audit. **N'a pas accès au contenu médical.** |
+| **Administrateur** | Gérer les établissements (26 provinces), les comptes du personnel (médecins, infirmiers), réinitialiser les mots de passe, consulter le journal d'audit. **N'a pas accès au contenu médical.** |
 
 Sécurité : mots de passe hachés (scrypt), sessions révocables (cookie `HttpOnly`/`SameSite=Strict`),
 mot de passe temporaire à changer à la première connexion, limitation des tentatives de connexion,
@@ -27,7 +28,7 @@ Prérequis : **Node.js ≥ 22.13** (la base SQLite est intégrée à Node, aucun
 
 ```bash
 npm install
-npm run seed:demo   # données fictives : dr.demo / Demo2026!  –  patient CD-2026-000001-1 / Demo2026!
+npm run seed:demo   # données fictives : dr.demo, inf.demo, patient CD-2026-000001-1 – mot de passe Demo2026!
 npm start           # http://localhost:3000
 npm test            # tests de l'API
 ```
@@ -67,7 +68,7 @@ test/                tests de bout en bout de l'API
 
 ## Parcours type
 
-1. L'**administrateur** crée l'établissement puis les comptes médecins (mot de passe temporaire affiché une seule fois).
+1. L'**administrateur** crée l'établissement puis les comptes des médecins et infirmiers (mot de passe temporaire affiché une seule fois).
 2. Le **médecin** crée la fiche du malade → un NUP est attribué (ex. `CD-2026-000001-1`, avec chiffre de contrôle).
 3. Le médecin enregistre consultations, examens, hospitalisations, rendez‑vous.
 4. Sur la fiche, « Créer l'accès patient » génère un identifiant (= NUP) et un mot de passe temporaire à remettre au malade.
@@ -78,13 +79,15 @@ test/                tests de bout en bout de l'API
 | Méthode | Chemin | Rôle |
 |---|---|---|
 | POST | `/api/auth/login`, `/api/auth/logout`, `/api/auth/password` · GET `/api/auth/me` | tous |
-| GET/POST | `/api/patients` (recherche `?q=`), GET/PATCH `/api/patients/:id` | médecin (GET `:id` : aussi le patient lui‑même) |
+| GET/POST | `/api/patients` (recherche `?q=`), GET/PATCH `/api/patients/:id` | médecin, infirmier (GET `:id` : aussi le patient lui‑même) |
+| POST | `/api/patients/:id/soins` | médecin, infirmier |
 | POST | `/api/patients/:id/consultations`, `/examens`, `/hospitalisations`, `/compte` | médecin |
-| PATCH | `/api/examens/:id/resultat`, `/api/hospitalisations/:id/sortie` | médecin |
-| GET | `/api/patients/:id/acces` | médecin, patient concerné |
-| GET/POST/PATCH | `/api/rendez-vous` | médecin, patient |
+| PATCH | `/api/examens/:id/resultat` | médecin, infirmier |
+| PATCH | `/api/hospitalisations/:id/sortie` | médecin |
+| GET | `/api/patients/:id/acces` | médecin, infirmier, patient concerné |
+| GET/POST/PATCH | `/api/rendez-vous` | médecin, infirmier, patient |
 | GET/POST/PATCH | `/api/etablissements`, `/api/users`, GET `/api/audit` | admin |
-| GET | `/fhir/r4/metadata`, `/fhir/r4/Patient/:nup`, `/fhir/r4/Patient/:nup/$everything` | médecin, patient concerné |
+| GET | `/fhir/r4/metadata`, `/fhir/r4/Patient/:nup`, `/fhir/r4/Patient/:nup/$everything` | médecin, infirmier, patient concerné |
 
 L'API accepte le cookie de session ou un en‑tête `Authorization: Bearer <token>` (jeton renvoyé par `/api/auth/login`).
 
