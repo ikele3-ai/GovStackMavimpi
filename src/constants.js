@@ -1,6 +1,14 @@
 // Référentiels partagés entre l'API et l'interface.
 
-export const ROLES = ['admin', 'medecin', 'patient'];
+export const ROLES = ['admin', 'medecin', 'infirmier', 'patient'];
+
+// Personnel soignant : accès (tracé) aux dossiers des patients.
+export const SOIGNANTS = ['medecin', 'infirmier'];
+
+export const TYPES_SOIN = [
+  'Prise des signes vitaux', 'Administration de médicament', 'Injection / perfusion', 'Pansement',
+  'Surveillance', 'Éducation du patient', 'Autre',
+];
 
 export const PROVINCES = [
   'Bas-Uele', 'Équateur', 'Haut-Katanga', 'Haut-Lomami', 'Haut-Uele', 'Ituri',
@@ -36,4 +44,5 @@ export const REFERENTIELS = {
   typesExamen: TYPES_EXAMEN,
   statutsRdv: STATUTS_RDV,
   modesSortie: MODES_SORTIE,
+  typesSoin: TYPES_SOIN,
 };

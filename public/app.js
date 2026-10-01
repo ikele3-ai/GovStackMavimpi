@@ -30,6 +30,14 @@ function age(dob) {
 }
 const fullName = (p) => [p.nom, p.postnom, p.prenom].filter(Boolean).join(' ');
 const drName = (nom, prenom) => (nom ? `Dr ${[prenom, nom].filter(Boolean).join(' ')}` : '—');
+// Nom d'un membre du personnel selon son rôle (« Dr … » pour un médecin, « Inf. … » pour un infirmier).
+const staffName = (role, nom, prenom) => {
+  const name = [prenom, nom].filter(Boolean).join(' ');
+  if (role === 'medecin') return drName(nom, prenom);
+  if (role === 'infirmier') return `Inf. ${name}`;
+  return name || '—';
+};
+const ROLE_LABELS = { admin: 'Administrateur', medecin: 'Médecin', infirmier: 'Infirmier(ère)', patient: 'Patient' };
 const toLocalInput = (d = new Date()) => {
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -268,12 +276,13 @@ function renderForcedPassword() {
 // ============================================================ Navigation
 const NAV = {
   medecin: [['#/', 'Tableau de bord'], ['#/patients', 'Patients'], ['#/rendez-vous', 'Rendez-vous'], ['#/compte', 'Mon compte']],
+  infirmier: [['#/', 'Tableau de bord'], ['#/patients', 'Patients'], ['#/rendez-vous', 'Rendez-vous'], ['#/compte', 'Mon compte']],
   patient: [['#/', 'Ma fiche'], ['#/rendez-vous', 'Mes rendez-vous'], ['#/compte', 'Mon compte']],
   admin: [['#/', 'Tableau de bord'], ['#/etablissements', 'Établissements'], ['#/utilisateurs', 'Utilisateurs'], ['#/audit', "Journal d'audit"], ['#/compte', 'Mon compte']],
 };
 
 const ROUTES = {
-  medecin: [
+  soignant: [
     [/^\/$/, viewDoctorHome], [/^\/patients$/, viewPatients], [/^\/patients\/(\d+)$/, (id) => viewFiche(Number(id))],
     [/^\/rendez-vous$/, viewDoctorRdv], [/^\/compte$/, viewCompte],
   ],
@@ -292,7 +301,7 @@ async function route() {
     const href = a.getAttribute('href').slice(1);
     a.classList.toggle('active', href === '/' ? path === '/' : path.startsWith(href));
   });
-  for (const [re, view] of ROUTES[role]) {
+  for (const [re, view] of ROUTES[isSoignant() ? 'soignant' : role]) {
     const m = path.match(re);
     if (m) {
       app.innerHTML = '<p class="loading">Chargement…</p>';
@@ -322,9 +331,8 @@ async function boot() {
   const me = state.me;
   $('#topbar').hidden = false;
   $('#nav').innerHTML = NAV[me.role].map(([href, label]) => `<a href="${href}">${esc(label)}</a>`).join('');
-  const roleLabel = { admin: 'Administrateur', medecin: 'Médecin', patient: 'Patient' }[me.role];
-  $('#whoami').innerHTML = `${esc(me.role === 'medecin' ? drName(me.nom, me.prenom) : [me.prenom, me.nom].filter(Boolean).join(' '))}
-    <span class="badge blue">${roleLabel}</span>${me.etablissement_nom ? ` <span class="muted small etab" title="${esc(me.etablissement_nom)}">${esc(me.etablissement_nom)}</span>` : ''}`;
+  $('#whoami').innerHTML = `${esc(staffName(me.role, me.nom, me.prenom))}
+    <span class="badge blue">${ROLE_LABELS[me.role]}</span>${me.etablissement_nom ? ` <span class="muted small etab" title="${esc(me.etablissement_nom)}">${esc(me.etablissement_nom)}</span>` : ''}`;
   await route();
 }
 
@@ -396,14 +404,14 @@ async function viewDoctorHome() {
   ]);
   const active = rdv.filter((r) => ['demande', 'confirme'].includes(r.statut));
   app.innerHTML = `
-    <div class="page-head"><h1>Bonjour, ${esc(drName(state.me.nom, state.me.prenom))}</h1>
+    <div class="page-head"><h1>Bonjour, ${esc(staffName(state.me.role, state.me.nom, state.me.prenom))}</h1>
       <div class="actions"><button class="btn primary" data-action="new-patient">+ Nouveau patient</button></div></div>
     <form class="search-bar" id="quick-search">
       <input name="q" type="search" placeholder="Rechercher un patient : nom, NUP ou téléphone…" aria-label="Rechercher un patient">
       <button class="btn primary">Rechercher</button>
     </form>
     <div class="stats">
-      ${stat(stats.mes_consultations_jour, 'Mes consultations du jour')}
+      ${isMedecin() ? stat(stats.mes_consultations_jour, 'Mes consultations du jour') : stat(stats.mes_soins_jour, 'Mes soins du jour')}
       ${stat(stats.consultations_jour, 'Consultations du jour (total)')}
       ${stat(stats.hospitalises, 'Patients hospitalisés')}
       ${stat(stats.examens_en_attente, 'Examens en attente')}
@@ -517,16 +525,20 @@ async function reloadFiche() {
   renderFiche();
 }
 
-const readOnly = () => state.me.role !== 'medecin';
+const isMedecin = () => state.me?.role === 'medecin';
+const isSoignant = () => ['medecin', 'infirmier'].includes(state.me?.role);
+// Lecture seule pour le patient ; le personnel soignant peut agir sur la fiche.
+const readOnly = () => !isSoignant();
 
 function renderFiche() {
-  const { patient: p, consultations, examens, hospitalisations, rendez_vous, compte } = state.fiche;
+  const { patient: p, consultations, soins, examens, hospitalisations, rendez_vous, compte } = state.fiche;
   const ro = readOnly();
   const hosp = hospitalisations.find((h) => h.statut === 'en_cours');
   const a = age(p.date_naissance);
   const initials = (p.nom[0] + (p.prenom?.[0] || p.postnom?.[0] || '')).toUpperCase();
   const tabs = [
     ['resume', 'Identité & antécédents'], ['consultations', 'Consultations', consultations.length],
+    ['soins', 'Soins infirmiers', soins.length],
     ['examens', 'Examens', examens.length], ['hospitalisations', 'Hospitalisations', hospitalisations.length],
     ['rdv', 'Rendez-vous', rendez_vous.length], ['acces', 'Journal des accès'],
   ];
@@ -548,13 +560,16 @@ function renderFiche() {
           </div>
         </div>
         <div class="actions">
-          ${ro ? '' : `
+          ${isMedecin() ? `
             <button class="btn primary" data-action="new-consultation">+ Consultation</button>
+            <button class="btn" data-action="new-soin">Soins / signes vitaux</button>
             <button class="btn" data-action="new-examen">Examen</button>
-            ${hosp ? '' : '<button class="btn" data-action="hospitaliser">Hospitaliser</button>'}
+            ${hosp ? '' : '<button class="btn" data-action="hospitaliser">Hospitaliser</button>'}` : ''}
+          ${isSoignant() && !isMedecin() ? '<button class="btn primary" data-action="new-soin">+ Soins / signes vitaux</button>' : ''}
+          ${ro ? '' : `
             <button class="btn" data-action="new-rdv">Rendez-vous</button>
-            <button class="btn" data-action="edit-patient">Modifier</button>
-            <button class="btn" data-action="compte-patient">${compte ? 'Réinitialiser l\'accès patient' : 'Créer l\'accès patient'}</button>`}
+            <button class="btn" data-action="edit-patient">Modifier</button>`}
+          ${isMedecin() ? `<button class="btn" data-action="compte-patient">${compte ? 'Réinitialiser l\'accès patient' : 'Créer l\'accès patient'}</button>` : ''}
           <button class="btn" data-action="export-fhir" title="Export au format HL7 FHIR R4">Export FHIR</button>
           <button class="btn" data-action="print">Imprimer</button>
         </div>
@@ -567,8 +582,9 @@ function renderFiche() {
     </nav>
     ${panel('resume', 'Identité & antécédents', resumeHtml(p, compte))}
     ${panel('consultations', 'Consultations', consultationsHtml(consultations))}
+    ${panel('soins', 'Soins infirmiers', soinsHtml(soins))}
     ${panel('examens', 'Examens', examensHtml(examens, ro))}
-    ${panel('hospitalisations', 'Hospitalisations', hospitalisationsHtml(hospitalisations, ro))}
+    ${panel('hospitalisations', 'Hospitalisations', hospitalisationsHtml(hospitalisations, !isMedecin()))}
     ${panel('rdv', 'Rendez-vous', `<div class="card">${rdvTable(rendez_vous, { withPatient: false, withActions: !ro, patientCancel: ro })}</div>`)}
     ${panel('acces', 'Journal des accès', `<div class="card" id="acces-panel"><p class="loading">Chargement…</p></div>`, true)}`;
   if (state.tab === 'acces') loadAcces();
@@ -625,6 +641,7 @@ function vitalsHtml(c) {
   if (c.poids != null) v.push(`Poids ${c.poids} kg`);
   if (c.taille != null) v.push(`Taille ${c.taille} cm`);
   if (c.poids && c.taille) v.push(`IMC ${(c.poids / (c.taille / 100) ** 2).toFixed(1)}`);
+  if (c.glycemie != null) v.push(`Glycémie ${c.glycemie} mmol/L`);
   return v.length ? `<div class="vitals">${v.map((x) => `<span>${esc(x)}</span>`).join('')}</div>` : '';
 }
 
@@ -646,6 +663,17 @@ function consultationsHtml(list) {
         <tbody>${c.prescriptions.map((r) => `<tr><td><strong>${esc(r.medicament)}</strong></td><td>${dash(r.dosage)}</td><td>${dash(r.posologie)}</td><td>${dash(r.duree)}</td><td>${dash(r.instructions)}</td></tr>`).join('')}</tbody>
       </table></div>` : ''}
       ${block('Recommandations', c.recommandations)}
+    </article>`).join('')}</div>`;
+}
+
+function soinsHtml(list) {
+  if (!list.length) return '<div class="card"><p class="empty">Aucun soin enregistré.</p></div>';
+  return `<div class="card">${list.map((s) => `
+    <article class="timeline-item soin">
+      <h3>${esc(s.type)}${s.hospitalisation_id ? ' <span class="badge orange">Hospitalisation</span>' : ''}</h3>
+      <div class="muted small">${fmtDateTime(s.date)} · ${esc(staffName(s.auteur_role, s.auteur_nom, s.auteur_prenom))}${s.etablissement_nom ? ` · ${esc(s.etablissement_nom)}` : ''}</div>
+      ${vitalsHtml(s)}
+      ${block('Note de soins', s.note)}
     </article>`).join('')}</div>`;
 }
 
@@ -682,7 +710,7 @@ function hospitalisationsHtml(list, ro) {
 
 const ACTION_LABELS = {
   LECTURE_FICHE: 'Consultation du dossier', CREATION_FICHE: 'Création du dossier', MODIFICATION_FICHE: 'Modification du dossier',
-  AJOUT_CONSULTATION: 'Ajout d\'une consultation', DEMANDE_EXAMEN: "Demande d'examen", RESULTAT_EXAMEN: "Résultat d'examen",
+  AJOUT_CONSULTATION: 'Ajout d\'une consultation', AJOUT_SOIN: 'Soins infirmiers', DEMANDE_EXAMEN: "Demande d'examen", RESULTAT_EXAMEN: "Résultat d'examen",
   ADMISSION: 'Hospitalisation', SORTIE: 'Sortie d\'hospitalisation', CREATION_RDV: 'Rendez-vous créé', MODIFICATION_RDV: 'Rendez-vous modifié',
   CREATION_COMPTE_PATIENT: 'Création de l\'accès patient', REINITIALISATION_COMPTE_PATIENT: "Réinitialisation de l'accès patient",
   FHIR_LECTURE_PATIENT: 'Lecture FHIR', FHIR_EXPORT_DOSSIER: 'Export FHIR du dossier', CONNEXION: 'Connexion du patient',
@@ -696,7 +724,7 @@ async function loadAcces() {
     ${rows.length ? `<div class="table-wrap"><table>
     <thead><tr><th>Date</th><th>Action</th><th>Par</th><th>Établissement</th></tr></thead>
     <tbody>${rows.map((r) => `<tr><td>${fmtDateTime(r.ts)}</td><td>${esc(ACTION_LABELS[r.action] || r.action)}</td>
-      <td>${r.role === 'medecin' ? esc(drName(r.nom, r.prenom)) : r.role === 'patient' ? 'Le patient' : esc([r.prenom, r.nom].filter(Boolean).join(' ') || r.role)}
+      <td>${r.role === 'patient' ? 'Le patient' : esc(staffName(r.role, r.nom, r.prenom) === '—' ? r.role : staffName(r.role, r.nom, r.prenom))}
         ${r.specialite ? `<span class="muted small">(${esc(r.specialite)})</span>` : ''}</td>
       <td>${dash(r.etablissement_nom)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun accès enregistré.</p>'}`;
 }
@@ -802,6 +830,28 @@ actions['new-consultation'] = () => {
   });
 };
 
+actions['new-soin'] = () => {
+  const fields = [
+    { name: 'date', label: 'Date et heure', type: 'datetime' },
+    { name: 'type', label: 'Type de soin', type: 'select', required: true, options: state.ref.typesSoin },
+  ];
+  const glycemie = [{ name: 'glycemie', label: 'Glycémie (mmol/L)', type: 'number', step: '0.1', min: 0.1, max: 40 }];
+  const note = [{ name: 'note', label: 'Note de soins (soins réalisés, médicaments administrés, observations)', type: 'textarea', full: true }];
+  openDialog({
+    title: `Soins infirmiers – ${fullName(state.fiche.patient)}`,
+    body: `
+      <fieldset><legend>Soin</legend>${gridHtml(fields, { date: new Date().toISOString(), type: state.ref.typesSoin[0] })}</fieldset>
+      <fieldset><legend>Signes vitaux</legend>${gridHtml([...vitalFields, ...glycemie], {})}</fieldset>
+      <fieldset><legend>Observations</legend>${gridHtml(note, {})}</fieldset>`,
+    onSubmit: async (form) => {
+      await api('POST', `/api/patients/${state.fiche.patient.id}/soins`, readFields(form, [...fields, ...vitalFields, ...glycemie, ...note]));
+      toast('Soins enregistrés');
+      state.tab = 'soins';
+      return reloadFiche;
+    },
+  });
+};
+
 actions['new-examen'] = () => {
   const consultations = state.fiche.consultations.map((c) => ({ value: c.id, label: `${fmtDate(c.date)} – ${c.motif}` }));
   const fields = [
@@ -889,7 +939,7 @@ actions['new-rdv'] = () => {
   ];
   openDialog({
     title: `Rendez-vous – ${fullName(state.fiche.patient)}`,
-    body: gridHtml(fields, { medecin_id: state.me.id }),
+    body: gridHtml(fields, { medecin_id: isMedecin() ? state.me.id : null }),
     onSubmit: async (form) => {
       await api('POST', '/api/rendez-vous', { ...readFields(form, fields), patient_id: state.fiche.patient.id });
       toast('Rendez-vous enregistré');
@@ -905,7 +955,7 @@ async function viewDoctorRdv() {
   const rows = await api('GET', `/api/rendez-vous?tous=${tous}&du=${encodeURIComponent(startOfToday().toISOString())}`);
   app.innerHTML = `
     <div class="page-head"><h1>Rendez-vous à venir</h1>
-      <label class="no-print"><span>Afficher</span>
+      <label class="no-print${isMedecin() ? '' : ' hidden'}"><span>Afficher</span>
         <select id="rdv-scope">
           <option value="0"${tous === '0' ? ' selected' : ''}>Mes rendez-vous et demandes non attribuées</option>
           <option value="1"${tous === '1' ? ' selected' : ''}>Tout mon établissement</option>
@@ -951,7 +1001,7 @@ async function viewCompte() {
     <h1>Mon compte</h1>
     <div class="card"><h2>Profil</h2>${dl([
       ['Identifiant', esc(me.username)], ['Nom', esc([me.prenom, me.nom].filter(Boolean).join(' '))],
-      ['Rôle', esc(me.role)], ['Établissement', esc(me.etablissement_nom)], ['Spécialité', esc(me.specialite)],
+      ['Rôle', esc(ROLE_LABELS[me.role])], ['Établissement', esc(me.etablissement_nom)], ['Spécialité', esc(me.specialite)],
       ['Dernière connexion', fmtDateTime(me.last_login_at)],
     ])}</div>
     <div class="card"><h2>Changer mon mot de passe</h2>
@@ -978,14 +1028,14 @@ async function viewAdminHome() {
   app.innerHTML = `
     <h1>Administration</h1>
     <div class="stats">
-      ${stat(s.etablissements, 'Établissements')}${stat(s.medecins, 'Médecins actifs')}
+      ${stat(s.etablissements, 'Établissements')}${stat(s.medecins, 'Médecins actifs')}${stat(s.infirmiers, 'Infirmiers actifs')}
       ${stat(s.patients, 'Patients enregistrés')}${stat(s.comptes_patients, 'Patients avec accès en ligne')}
       ${stat(s.acces_24h, 'Événements tracés (24 h)')}
     </div>
     <div class="card"><h2>Mise en route</h2>
       <ol>
         <li>Déclarez les <a href="#/etablissements">établissements</a> (hôpitaux, centres de santé).</li>
-        <li>Créez les comptes des <a href="#/utilisateurs">médecins</a> et remettez-leur leur mot de passe temporaire.</li>
+        <li>Créez les comptes des <a href="#/utilisateurs">médecins et infirmiers</a> et remettez-leur leur mot de passe temporaire.</li>
         <li>Les médecins créent les fiches patients et, si souhaité, l'accès en ligne de chaque patient.</li>
         <li>Surveillez les accès dans le <a href="#/audit">journal d'audit</a>.</li>
       </ol>
@@ -1028,16 +1078,16 @@ actions['new-etab'] = () => {
 async function viewUsers() {
   const [users, etabs] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/etablissements')]);
   state.etablissements = etabs;
-  const roleBadge = { admin: 'red', medecin: 'blue', patient: '' };
+  const roleBadge = { admin: 'red', medecin: 'blue', infirmier: 'green', patient: '' };
   app.innerHTML = `
     <div class="page-head"><h1>Utilisateurs</h1>
-      <div class="actions"><button class="btn primary" data-action="new-user">+ Nouveau compte (médecin / admin)</button></div></div>
+      <div class="actions"><button class="btn primary" data-action="new-user">+ Nouveau compte (personnel)</button></div></div>
     <div class="card"><div class="table-wrap"><table>
       <thead><tr><th>Identifiant</th><th>Nom</th><th>Rôle</th><th>Établissement</th><th>Statut</th><th>Dernière connexion</th><th></th></tr></thead>
       <tbody>${users.map((u) => `<tr>
         <td class="nup">${esc(u.username)}</td>
         <td>${esc([u.prenom, u.nom].filter(Boolean).join(' '))}${u.specialite ? `<div class="muted small">${esc(u.specialite)}</div>` : ''}</td>
-        <td><span class="badge ${roleBadge[u.role]}">${esc(u.role)}</span></td>
+        <td><span class="badge ${roleBadge[u.role]}">${esc(ROLE_LABELS[u.role] || u.role)}</span></td>
         <td>${dash(u.etablissement_nom)}</td>
         <td>${u.actif ? '<span class="badge green">Actif</span>' : '<span class="badge red">Désactivé</span>'}
           ${u.must_change_password ? '<span class="badge orange">MDP temporaire</span>' : ''}</td>
@@ -1049,10 +1099,11 @@ async function viewUsers() {
 
 actions['new-user'] = () => {
   const fields = [
-    { name: 'role', label: 'Rôle', type: 'select', required: true, options: [{ value: 'medecin', label: 'Médecin' }, { value: 'admin', label: 'Administrateur' }] },
+    { name: 'role', label: 'Rôle', type: 'select', required: true, options: [
+      { value: 'medecin', label: 'Médecin' }, { value: 'infirmier', label: 'Infirmier(ère)' }, { value: 'admin', label: 'Administrateur' }] },
     { name: 'username', label: 'Identifiant de connexion (ex. dr.mbuyi)', required: true },
     { name: 'nom', label: 'Nom', required: true }, { name: 'prenom', label: 'Prénom' },
-    { name: 'specialite', label: 'Spécialité' }, { name: 'numero_ordre', label: "N° d'ordre (CNOM)" },
+    { name: 'specialite', label: 'Spécialité' }, { name: 'numero_ordre', label: "N° d'ordre professionnel" },
     { name: 'etablissement_id', label: 'Établissement', type: 'select', numeric: true,
       options: state.etablissements.map((e) => ({ value: e.id, label: e.nom })) },
     { name: 'telephone', label: 'Téléphone', type: 'tel' }, { name: 'email', label: 'E-mail', type: 'email' },

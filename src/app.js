@@ -60,13 +60,14 @@ export function createApp(db) {
   app.use('/api', soinsRouter(db));
   app.use('/api/rendez-vous', rendezVousRouter(db));
 
-  app.get('/api/stats', requireRole('medecin', 'admin'), (req, res) => {
+  app.get('/api/stats', requireRole('medecin', 'infirmier', 'admin'), (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     const count = (sql, ...args) => db.prepare(sql).get(...args).n;
     if (req.user.role === 'admin') {
       return res.json({
         etablissements: count('SELECT COUNT(*) n FROM etablissements'),
         medecins: count("SELECT COUNT(*) n FROM users WHERE role = 'medecin' AND actif = 1"),
+        infirmiers: count("SELECT COUNT(*) n FROM users WHERE role = 'infirmier' AND actif = 1"),
         patients: count('SELECT COUNT(*) n FROM patients'),
         comptes_patients: count("SELECT COUNT(*) n FROM users WHERE role = 'patient'"),
         acces_24h: count('SELECT COUNT(*) n FROM audit_log WHERE ts > ?', new Date(Date.now() - 864e5).toISOString()),
@@ -75,10 +76,13 @@ export function createApp(db) {
     res.json({
       patients: count('SELECT COUNT(*) n FROM patients'),
       consultations_jour: count('SELECT COUNT(*) n FROM consultations WHERE substr(date,1,10) = ?', today),
+      mes_soins_jour: count('SELECT COUNT(*) n FROM soins WHERE substr(date,1,10) = ? AND auteur_id = ?', today, req.user.id),
       mes_consultations_jour: count('SELECT COUNT(*) n FROM consultations WHERE substr(date,1,10) = ? AND medecin_id = ?', today, req.user.id),
       hospitalises: count("SELECT COUNT(*) n FROM hospitalisations WHERE statut = 'en_cours' AND etablissement_id IS ?", req.user.etablissement_id ?? null),
       examens_en_attente: count("SELECT COUNT(*) n FROM examens WHERE statut = 'demande' AND etablissement_id IS ?", req.user.etablissement_id ?? null),
-      rdv_demandes: count("SELECT COUNT(*) n FROM rendez_vous WHERE statut = 'demande' AND (medecin_id = ? OR (medecin_id IS NULL AND etablissement_id IS ?))", req.user.id, req.user.etablissement_id ?? null),
+      rdv_demandes: req.user.role === 'infirmier'
+        ? count("SELECT COUNT(*) n FROM rendez_vous WHERE statut = 'demande' AND etablissement_id IS ?", req.user.etablissement_id ?? null)
+        : count("SELECT COUNT(*) n FROM rendez_vous WHERE statut = 'demande' AND (medecin_id = ? OR (medecin_id IS NULL AND etablissement_id IS ?))", req.user.id, req.user.etablissement_id ?? null),
     });
   });
 

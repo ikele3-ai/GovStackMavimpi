@@ -17,13 +17,13 @@ const etablissementSchema = {
 
 const staffSchema = {
   username: { type: 'string', required: true, min: 3, max: 50, pattern: /^[A-Za-z0-9._-]+$/, label: 'Identifiant' },
-  role: { type: 'enum', required: true, values: ['admin', 'medecin'], label: 'Rôle' },
+  role: { type: 'enum', required: true, values: ['admin', 'medecin', 'infirmier'], label: 'Rôle' },
   nom: { type: 'string', required: true, max: 100, label: 'Nom' },
   prenom: { type: 'string', max: 100, label: 'Prénom' },
   email: { type: 'email', max: 200, label: 'E-mail' },
   telephone: { type: 'string', max: 30, label: 'Téléphone' },
   specialite: { type: 'string', max: 100, label: 'Spécialité' },
-  numero_ordre: { type: 'string', max: 50, label: "N° d'ordre (CNOM)" },
+  numero_ordre: { type: 'string', max: 50, label: "N° d'ordre professionnel" },
   etablissement_id: { type: 'integer', min: 1, label: 'Établissement' },
 };
 
@@ -89,8 +89,8 @@ export function adminRouter(db) {
 
   r.post('/users', requireRole('admin'), async (req, res) => {
     const data = validate(req.body, staffSchema);
-    if (data.role === 'medecin' && !data.etablissement_id) {
-      throw new HttpError(400, 'Données invalides', ['Un médecin doit être rattaché à un établissement']);
+    if (data.role !== 'admin' && !data.etablissement_id) {
+      throw new HttpError(400, 'Données invalides', ['Le personnel soignant doit être rattaché à un établissement']);
     }
     if (data.etablissement_id && !db.prepare('SELECT 1 FROM etablissements WHERE id = ?').get(data.etablissement_id)) {
       throw new HttpError(400, 'Établissement introuvable');

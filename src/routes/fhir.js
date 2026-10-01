@@ -23,7 +23,19 @@ const VITALS = [
   ['poids', '29463-7', 'Poids corporel', 'kg', 'kg'],
   ['taille', '8302-2', 'Taille', 'cm', 'cm'],
   ['saturation', '59408-5', 'Saturation en oxygène', '%', '%'],
+  ['glycemie', '15074-8', 'Glycémie', 'mmol/L', 'mmol/L'],
 ];
+
+// Signes vitaux d'une consultation ou d'un soin infirmier → ressources Observation.
+function vitalObservations(src, idPrefix, date, subject, encounter) {
+  return VITALS.filter(([field]) => src[field] != null).map(([field, code, display, unit, human]) => clean({
+    resourceType: 'Observation', id: `${idPrefix}${field}-${src.id}`, status: 'final',
+    category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'vital-signs' }] }],
+    code: { coding: [{ system: LOINC, code, display }], text: display },
+    subject, encounter, effectiveDateTime: date,
+    valueQuantity: { value: src[field], unit: human, system: UCUM, code: unit },
+  }));
+}
 
 const clean = (obj) => JSON.parse(JSON.stringify(obj, (k, v) => (v === null || v === '' ? undefined : v)));
 
@@ -83,22 +95,26 @@ function toBundle(record, baseUrl) {
         recordedDate: c.date,
       }));
     }
-    for (const [field, code, display, unit, human] of VITALS) {
-      if (c[field] == null) continue;
-      entries.push({
-        resourceType: 'Observation', id: `${field}-${c.id}`, status: 'final',
-        category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'vital-signs' }] }],
-        code: { coding: [{ system: LOINC, code, display }], text: display },
-        subject, encounter: { reference: `Encounter/${enc}` }, effectiveDateTime: c.date,
-        valueQuantity: { value: c[field], unit: human, system: UCUM, code: unit },
-      });
-    }
+    entries.push(...vitalObservations(c, '', c.date, subject, { reference: `Encounter/${enc}` }));
     for (const rx of c.prescriptions) {
       entries.push(clean({
         resourceType: 'MedicationRequest', id: `prescription-${rx.id}`, status: 'active', intent: 'order',
         medicationCodeableConcept: { text: [rx.medicament, rx.dosage].filter(Boolean).join(' ') },
         subject, encounter: { reference: `Encounter/${enc}` }, authoredOn: c.date,
         dosageInstruction: [{ text: [rx.posologie, rx.duree, rx.instructions].filter(Boolean).join(' – ') }],
+      }));
+    }
+  }
+
+  for (const s of record.soins) {
+    const encounter = s.hospitalisation_id ? { reference: `Encounter/hospitalisation-${s.hospitalisation_id}` } : undefined;
+    entries.push(...vitalObservations(s, 'soin-', s.date, subject, encounter));
+    if (s.note) {
+      entries.push(clean({
+        resourceType: 'Observation', id: `note-soin-${s.id}`, status: 'final',
+        category: [{ text: 'Soins infirmiers' }], code: { text: s.type }, subject, encounter,
+        effectiveDateTime: s.date, performer: [{ display: [s.auteur_prenom, s.auteur_nom].filter(Boolean).join(' ') }],
+        valueString: s.note,
       }));
     }
   }

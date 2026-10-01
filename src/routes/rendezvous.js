@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireRole } from '../auth.js';
 import { audit } from '../audit.js';
-import { STATUTS_RDV } from '../constants.js';
+import { SOIGNANTS, STATUTS_RDV } from '../constants.js';
 import { insert, update } from '../db.js';
 import { HttpError, parseId, validate } from '../validation.js';
 
@@ -30,6 +30,7 @@ const SELECT_RDV = `
 
 export function rendezVousRouter(db) {
   const r = Router();
+  const autorises = requireRole(...SOIGNANTS, 'patient');
 
   const getMedecin = (id) => {
     const m = db.prepare("SELECT id, etablissement_id FROM users WHERE id = ? AND role = 'medecin' AND actif = 1").get(id);
@@ -37,24 +38,25 @@ export function rendezVousRouter(db) {
     return m;
   };
 
-  r.get('/', requireRole('medecin', 'patient'), (req, res) => {
+  r.get('/', autorises, (req, res) => {
     const du = typeof req.query.du === 'string' && req.query.du ? req.query.du : null;
     const au = typeof req.query.au === 'string' && req.query.au ? req.query.au : null;
     if (req.user.role === 'patient') {
       return res.json(db.prepare(`${SELECT_RDV} WHERE r.patient_id = ? ORDER BY r.date_heure DESC`).all(req.user.patient_id));
     }
-    // Médecin : ses rendez-vous + ceux de son établissement non encore attribués
+    // Médecin : ses rendez-vous + ceux de son établissement non encore attribués.
+    // Infirmier : tous les rendez-vous de son établissement (gestion de l'accueil).
     const rows = db.prepare(`${SELECT_RDV}
       WHERE (r.medecin_id = :me OR (r.medecin_id IS NULL AND r.etablissement_id IS :etab)
              OR (:tous = 1 AND r.etablissement_id IS :etab))
         AND (:du IS NULL OR r.date_heure >= :du) AND (:au IS NULL OR r.date_heure < :au)
       ORDER BY r.date_heure`).all({
-      me: req.user.id, etab: req.user.etablissement_id ?? null, tous: req.query.tous === '1' ? 1 : 0, du, au,
+      me: req.user.id, etab: req.user.etablissement_id ?? null, tous: req.query.tous === '1' || req.user.role === 'infirmier' ? 1 : 0, du, au,
     });
     res.json(rows);
   });
 
-  r.post('/', requireRole('medecin', 'patient'), (req, res) => {
+  r.post('/', autorises, (req, res) => {
     const data = validate(req.body, rdvSchema);
     let row;
     if (req.user.role === 'patient') {
@@ -70,7 +72,10 @@ export function rendezVousRouter(db) {
       if (!data.patient_id || !db.prepare('SELECT 1 FROM patients WHERE id = ?').get(data.patient_id)) {
         throw new HttpError(400, 'Patient introuvable');
       }
-      const med = data.medecin_id ? getMedecin(data.medecin_id) : { id: req.user.id, etablissement_id: req.user.etablissement_id };
+      // Sans médecin précisé : le médecin connecté, ou « non attribué » si c'est un infirmier.
+      const med = data.medecin_id ? getMedecin(data.medecin_id)
+        : req.user.role === 'medecin' ? { id: req.user.id, etablissement_id: req.user.etablissement_id }
+          : { id: null, etablissement_id: req.user.etablissement_id };
       row = { patient_id: data.patient_id, medecin_id: med.id, etablissement_id: med.etablissement_id ?? null, statut: 'confirme' };
     }
     const id = insert(db, 'rendez_vous', {
@@ -80,7 +85,7 @@ export function rendezVousRouter(db) {
     res.status(201).json(db.prepare(`${SELECT_RDV} WHERE r.id = ?`).get(id));
   });
 
-  r.patch('/:id', requireRole('medecin', 'patient'), (req, res) => {
+  r.patch('/:id', autorises, (req, res) => {
     const id = parseId(req.params.id);
     const rdv = db.prepare('SELECT * FROM rendez_vous WHERE id = ?').get(id);
     if (!rdv) throw new HttpError(404, 'Rendez-vous introuvable');

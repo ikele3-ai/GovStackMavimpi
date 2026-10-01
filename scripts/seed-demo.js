@@ -37,6 +37,10 @@ tx(db, () => {
     username: 'dr.demo', password_hash: hash, role: 'medecin', nom: 'Demo', prenom: 'Médecin', specialite: 'Médecine interne',
     numero_ordre: 'CNOM-DEMO-001', etablissement_id: kin, must_change_password: 0,
   });
+  const inf = insert(db, 'users', {
+    username: 'inf.demo', password_hash: hash, role: 'infirmier', nom: 'Demo', prenom: 'Infirmière',
+    etablissement_id: kin, must_change_password: 0,
+  });
   insert(db, 'users', {
     username: 'dr.pediatre', password_hash: hash, role: 'medecin', nom: 'Pédiatre', prenom: 'Démo', specialite: 'Pédiatrie',
     etablissement_id: lub, must_change_password: 0,
@@ -90,6 +94,11 @@ tx(db, () => {
     motif: 'Crise vaso-occlusive – hydratation et antalgiques IV', date_admission: daysAgo(1, 14),
   });
   void c3;
+  insert(db, 'soins', {
+    patient_id: ids[1], auteur_id: inf, etablissement_id: kin, date: daysAgo(0, 8), type: 'Surveillance',
+    temperature: 37.6, pouls: 104, saturation: 97, note: 'Douleur en baisse (EVA 4/10). Perfusion en cours, bonne diurèse.',
+    hospitalisation_id: db.prepare("SELECT id FROM hospitalisations WHERE patient_id = ? AND statut = 'en_cours'").get(ids[1]).id,
+  });
 
   const future = new Date(Date.now() + 2 * 864e5); future.setHours(10, 30, 0, 0);
   insert(db, 'rendez_vous', { patient_id: ids[0], medecin_id: dr, etablissement_id: kin, date_heure: future.toISOString(), motif: 'Contrôle tension artérielle', statut: 'confirme', cree_par: dr });
@@ -101,7 +110,8 @@ tx(db, () => {
     patient_id: ids[0], must_change_password: 0,
   });
   console.log('Données de démonstration créées :');
-  console.log(`  Médecin : dr.demo / ${DEMO_PASSWORD}`);
+  console.log(`  Médecin   : dr.demo / ${DEMO_PASSWORD}`);
+  console.log(`  Infirmière: inf.demo / ${DEMO_PASSWORD}`);
   console.log(`  Patient : ${makeNup(ids[0])} / ${DEMO_PASSWORD}`);
   console.log(`  Admin   : admin / ${DEMO_PASSWORD} (si créé par ce script)`);
 });

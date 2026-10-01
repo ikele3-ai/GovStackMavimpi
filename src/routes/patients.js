@@ -3,7 +3,7 @@ import { destroyUserSessions, generateTempPassword, hashPassword, requireRole } 
 import { audit } from '../audit.js';
 import { config } from '../config.js';
 import {
-  ETATS_CIVILS, GROUPES_SANGUINS, MODES_SORTIE, PROVINCES, SEXES, TYPES_EXAMEN,
+  ETATS_CIVILS, GROUPES_SANGUINS, MODES_SORTIE, PROVINCES, SEXES, SOIGNANTS, TYPES_EXAMEN, TYPES_SOIN,
 } from '../constants.js';
 import { insert, tx, update } from '../db.js';
 import { HttpError, parseId, validate } from '../validation.js';
@@ -73,6 +73,21 @@ const resultatSchema = {
   interpretation: { type: 'text', max: 5000, label: 'Interprétation' },
 };
 
+const soinSchema = {
+  date: { type: 'datetime', label: 'Date' },
+  type: { type: 'enum', required: true, values: TYPES_SOIN, label: 'Type de soin' },
+  temperature: consultationSchema.temperature,
+  tension_sys: consultationSchema.tension_sys,
+  tension_dia: consultationSchema.tension_dia,
+  pouls: consultationSchema.pouls,
+  frequence_resp: consultationSchema.frequence_resp,
+  saturation: consultationSchema.saturation,
+  poids: consultationSchema.poids,
+  taille: consultationSchema.taille,
+  glycemie: { type: 'number', min: 0.1, max: 40, label: 'Glycémie (mmol/L)' },
+  note: { type: 'text', max: 5000, label: 'Note de soins' },
+};
+
 const hospitalisationSchema = {
   service: { type: 'string', required: true, max: 100, label: 'Service' },
   chambre: { type: 'string', max: 20, label: 'Chambre' },
@@ -105,10 +120,10 @@ export function makeNup(id, year = new Date().getFullYear()) {
 
 const nowIso = () => new Date().toISOString();
 
-/** Un médecin accède à toutes les fiches (accès tracé) ; un patient uniquement à la sienne. */
+/** Le personnel soignant accède à toutes les fiches (accès tracé) ; un patient uniquement à la sienne. */
 export function assertCanRead(req, patientId) {
   const u = req.user;
-  if (u.role === 'medecin') return;
+  if (SOIGNANTS.includes(u.role)) return;
   if (u.role === 'patient' && u.patient_id === patientId) return;
   throw new HttpError(403, 'Accès refusé à ce dossier');
 }
@@ -146,16 +161,24 @@ export function loadFullRecord(db, patientId) {
     FROM rendez_vous r LEFT JOIN users u ON u.id = r.medecin_id
     LEFT JOIN etablissements e ON e.id = r.etablissement_id
     WHERE r.patient_id = ? ORDER BY r.date_heure DESC`).all(patientId);
+  const soins = db.prepare(`
+    SELECT s.*, u.nom AS auteur_nom, u.prenom AS auteur_prenom, u.role AS auteur_role, e.nom AS etablissement_nom
+    FROM soins s JOIN users u ON u.id = s.auteur_id
+    LEFT JOIN etablissements e ON e.id = s.etablissement_id
+    WHERE s.patient_id = ? ORDER BY s.date DESC, s.id DESC`).all(patientId);
   const compte = db.prepare('SELECT username, actif, last_login_at FROM users WHERE patient_id = ?').get(patientId) || null;
-  return { patient, consultations, examens, hospitalisations, rendez_vous, compte };
+  return { patient, consultations, soins, examens, hospitalisations, rendez_vous, compte };
 }
 
 export function patientsRouter(db) {
   const r = Router();
+  // Diagnostic, prescription, examens, hospitalisation, accès patient : médecin uniquement.
   const medecin = requireRole('medecin');
+  // Accueil, fiche, soins infirmiers : tout le personnel soignant.
+  const soignant = requireRole(...SOIGNANTS);
 
   // Recherche de patients (nom, postnom, prénom, NUP, téléphone)
-  r.get('/', medecin, (req, res) => {
+  r.get('/', soignant, (req, res) => {
     const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : '';
     const like = `%${q.replace(/[%_\\]/g, (m) => '\\' + m)}%`;
     const rows = db.prepare(`
@@ -172,7 +195,7 @@ export function patientsRouter(db) {
   });
 
   // Création d'une fiche patient
-  r.post('/', medecin, (req, res) => {
+  r.post('/', soignant, (req, res) => {
     const data = validate(req.body, patientSchema);
     if (req.body.confirmer_doublon !== true) {
       const doublons = db.prepare(`
@@ -207,7 +230,7 @@ export function patientsRouter(db) {
     res.json(loadFullRecord(db, id));
   });
 
-  r.patch('/:id', medecin, (req, res) => {
+  r.patch('/:id', soignant, (req, res) => {
     const id = parseId(req.params.id);
     getPatientOr404(db, id);
     const data = validate(req.body, patientSchema, { partial: true });
@@ -278,6 +301,25 @@ export function patientsRouter(db) {
     res.status(201).json({ id });
   });
 
+  // --- Soins infirmiers (signes vitaux, notes de soins) ---
+  r.post('/:id/soins', soignant, (req, res) => {
+    const patientId = parseId(req.params.id);
+    getPatientOr404(db, patientId);
+    const data = validate(req.body, soinSchema);
+    const hosp = db.prepare("SELECT id FROM hospitalisations WHERE patient_id = ? AND statut = 'en_cours'").get(patientId);
+    const id = insert(db, 'soins', {
+      ...data,
+      date: data.date || nowIso(),
+      patient_id: patientId,
+      auteur_id: req.user.id,
+      etablissement_id: req.user.etablissement_id ?? null,
+      hospitalisation_id: hosp?.id ?? null,
+    });
+    db.prepare('UPDATE patients SET updated_at = ? WHERE id = ?').run(nowIso(), patientId);
+    audit(db, req, 'AJOUT_SOIN', { type: 'soin', id, patientId });
+    res.status(201).json({ id });
+  });
+
   // --- Examens ---
   r.post('/:id/examens', medecin, (req, res) => {
     const patientId = parseId(req.params.id);
@@ -319,7 +361,7 @@ export function soinsRouter(db) {
   const r = Router();
   const medecin = requireRole('medecin');
 
-  r.patch('/examens/:id/resultat', medecin, (req, res) => {
+  r.patch('/examens/:id/resultat', requireRole(...SOIGNANTS), (req, res) => {
     const id = parseId(req.params.id);
     const ex = db.prepare('SELECT * FROM examens WHERE id = ?').get(id);
     if (!ex) throw new HttpError(404, 'Examen introuvable');

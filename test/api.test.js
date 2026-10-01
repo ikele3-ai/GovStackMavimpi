@@ -58,7 +58,7 @@ async function activate(username, tempPassword, newPassword) {
 }
 
 describe('Parcours complet', () => {
-  let admin, doc, doc2, pat, etabId, patientId, nup, patientUser;
+  let admin, doc, doc2, inf, pat, etabId, patientId, nup, patientUser;
 
   test('santé du service', async () => {
     const r = await client()('GET', '/health');
@@ -208,6 +208,85 @@ describe('Parcours complet', () => {
     assert.equal(cancel.data.statut, 'annule');
   });
 
+  test("l'admin crée un compte infirmier (établissement obligatoire)", async () => {
+    const sansEtab = await admin('POST', '/api/users', { username: 'inf.sans', role: 'infirmier', nom: 'Sans' });
+    assert.equal(sansEtab.status, 400);
+    const r = await admin('POST', '/api/users', { username: 'inf.mbala', role: 'infirmier', nom: 'Mbala', prenom: 'Esther', etablissement_id: etabId });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    inf = await activate('inf.mbala', r.data.temp_password, 'Infirmiere2026');
+    const me = await inf('GET', '/api/auth/me');
+    assert.equal(me.data.role, 'infirmier');
+  });
+
+  test("l'infirmière : accueil, lecture des fiches, soins et résultats", async () => {
+    const list = await inf('GET', '/api/patients?q=kalala');
+    assert.equal(list.status, 200);
+    assert.equal(list.data.length, 1);
+
+    const fiche = await inf('GET', `/api/patients/${patientId}`);
+    assert.equal(fiche.status, 200);
+
+    const p = await inf('POST', '/api/patients', { nom: 'Accueil', prenom: 'Triage', sexe: 'F' });
+    assert.equal(p.status, 201, JSON.stringify(p.data));
+    const edit = await inf('PATCH', `/api/patients/${p.data.id}`, { telephone: '+243 820 000 000' });
+    assert.equal(edit.status, 200);
+
+    const soin = await inf('POST', `/api/patients/${patientId}/soins`, {
+      type: 'Prise des signes vitaux', temperature: 38.4, tension_sys: 130, tension_dia: 85, glycemie: 5.6, note: 'Patiente fébrile, hydratation encouragée',
+    });
+    assert.equal(soin.status, 201, JSON.stringify(soin.data));
+    const badSoin = await inf('POST', `/api/patients/${patientId}/soins`, { type: 'Inventé' });
+    assert.equal(badSoin.status, 400);
+
+    const x = await doc('POST', `/api/patients/${patientId}/examens`, { type: 'Laboratoire', libelle: 'Glycémie à jeun' });
+    const res = await inf('PATCH', `/api/examens/${x.data.id}/resultat`, { resultat: '5,2 mmol/L' });
+    assert.equal(res.status, 200);
+
+    const after = await inf('GET', `/api/patients/${patientId}`);
+    assert.equal(after.data.soins.length, 1);
+    assert.equal(after.data.soins[0].auteur_role, 'infirmier');
+    assert.equal(after.data.soins[0].auteur_nom, 'Mbala');
+
+    const stats = await inf('GET', '/api/stats');
+    assert.equal(stats.data.mes_soins_jour, 1);
+  });
+
+  test("l'infirmière ne diagnostique pas, ne prescrit pas, n'hospitalise pas", async () => {
+    const c = await inf('POST', `/api/patients/${patientId}/consultations`, { motif: 'x', prescriptions: [{ medicament: 'Amoxicilline' }] });
+    assert.equal(c.status, 403);
+    const x = await inf('POST', `/api/patients/${patientId}/examens`, { type: 'Laboratoire', libelle: 'NFS' });
+    assert.equal(x.status, 403);
+    const h = await inf('POST', `/api/patients/${patientId}/hospitalisations`, { service: 'X', motif: 'Y' });
+    assert.equal(h.status, 403);
+    const compte = await inf('POST', `/api/patients/${patientId}/compte`, {});
+    assert.equal(compte.status, 403);
+    const audit = await inf('GET', '/api/audit');
+    assert.equal(audit.status, 403);
+    const users = await inf('POST', '/api/users', { username: 'pirate', role: 'admin', nom: 'P' });
+    assert.equal(users.status, 403);
+  });
+
+  test("l'infirmière gère les rendez-vous de son établissement", async () => {
+    const future = new Date(Date.now() + 2 * 864e5).toISOString();
+    const r = await inf('POST', '/api/rendez-vous', { patient_id: patientId, date_heure: future, motif: 'Pansement' });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.medecin_id, null, 'un infirmier ne s\'attribue pas le rendez-vous');
+    assert.equal(r.data.etablissement_id, etabId);
+    const list = await inf('GET', '/api/rendez-vous');
+    assert.ok(list.data.some((x) => x.id === r.data.id));
+    const conf = await inf('PATCH', `/api/rendez-vous/${r.data.id}`, { statut: 'termine' });
+    assert.equal(conf.data.statut, 'termine');
+  });
+
+  test("le patient voit les soins et l'infirmière dans son journal d'accès", async () => {
+    const own = await pat('GET', `/api/patients/${patientId}`);
+    assert.equal(own.data.soins.length, 1);
+    const acces = await pat('GET', `/api/patients/${patientId}/acces`);
+    assert.ok(acces.data.some((a) => a.action === 'AJOUT_SOIN' && a.role === 'infirmier' && a.nom === 'Mbala'));
+    const soin = await pat('POST', `/api/patients/${patientId}/soins`, { type: 'Autre' });
+    assert.equal(soin.status, 403);
+  });
+
   test('FHIR R4 : Patient et $everything', async () => {
     const meta = await client()('GET', '/fhir/r4/metadata');
     assert.equal(meta.data.resourceType, 'CapabilityStatement');
@@ -224,6 +303,9 @@ describe('Parcours complet', () => {
     for (const t of ['Patient', 'Encounter', 'Condition', 'Observation', 'MedicationRequest', 'DiagnosticReport', 'AllergyIntolerance']) {
       assert.ok(types.includes(t), `ressource ${t} attendue`);
     }
+    const ids = b.data.entry.map((e) => e.resource.id);
+    assert.ok(ids.some((id) => id.startsWith('soin-glycemie-')), 'glycémie du soin infirmier attendue');
+    assert.ok(ids.some((id) => id.startsWith('note-soin-')), 'note de soins attendue');
     const nf = await doc('GET', '/fhir/r4/Patient/CD-0000-000000-0');
     assert.equal(nf.status, 404);
     assert.equal(nf.data.resourceType, 'OperationOutcome');
